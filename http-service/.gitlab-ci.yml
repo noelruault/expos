@@ -1,0 +1,77 @@
+workflow:
+  rules:
+    # For merge requests, create a pipeline.
+    - if: '$CI_MERGE_REQUEST_IID'
+    # For `main` branch, create a pipeline (this includes on schedules, pushes, merges, etc.).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    # For tags, create a pipeline.
+    - if: '$CI_COMMIT_TAG'
+
+# to learn more about .gitlab-ci.yml file visit https://docs.gitlab.com/ee/ci/yaml/
+
+stages:
+  - prepare
+  - build
+  - test
+
+default:
+  image: golang:1.16.5
+
+
+.go-mod-cache:
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.GOPATH
+  before_script:
+    - mkdir -p .GOPATH
+  cache:
+    paths:
+      - .GOPATH/pkg/mod/
+
+download_deps:
+  extends: .go-mod-cache
+  stage: prepare
+  script:
+    - go mod tidy
+    - go mod download
+  artifacts:
+    paths:
+      - go.mod
+      - go.sum
+
+build_binary:
+  extends: .go-mod-cache
+  stage: build
+  needs:
+    - job: download_deps
+      artifacts: true
+  script:
+    - go build -o ./bin/service
+
+unit_tests:
+  extends: .go-mod-cache
+  stage: test
+  needs:
+    - job: download_deps
+      artifacts: true
+  script:
+    - go test ./... -v -timeout 10s
+
+lint:
+  extends: .go-mod-cache
+  stage: test
+  needs:
+    - job: download_deps
+      artifacts: true
+  image: golangci/golangci-lint
+  variables:
+      REPORT_FILE: gl-code-quality-report.json
+      LINT_FLAGS: "--color never --deadline 15m"
+      OUT_FORMAT: code-climate
+  script:
+    - golangci-lint run ./... --out-format ${OUT_FORMAT} ${LINT_FLAGS} | tee ${REPORT_FILE}
+  timeout: 15 minutes
+  artifacts:
+    reports:
+      codequality: ${REPORT_FILE}
+    paths:
+      - ${REPORT_FILE}
